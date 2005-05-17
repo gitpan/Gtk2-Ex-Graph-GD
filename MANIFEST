@@ -1,0 +1,8 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/Gtk2-Ex-Graph-GD-test-1.t
+lib/Gtk2/Ex/Graph/GD.pm
+examples/graph-gd-demo.pl
+META.yml                                 Module meta-data (added by MakeMaker)
