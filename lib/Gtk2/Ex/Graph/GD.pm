@@ -1,6 +1,6 @@
 package Gtk2::Ex::Graph::GD;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use strict;
 use warnings;
@@ -8,7 +8,6 @@ use Data::Dumper;
 use GD::Graph::bars;
 use GD::Graph::pie;
 use GD::Graph::lines;
-use Gtk2::Ex::Simple::Menu;
 use Gtk2;
 use Glib qw /TRUE FALSE/;
 
@@ -20,17 +19,20 @@ sub new {
 	$self->{graph} = undef;
 	$self->{graphtype} = $type;
 	$self->{imagesize} = [$width, $height];
-	$self->set_type($type);
+	$self->{eventbox} = Gtk2::EventBox->new;
+	$self->{optionsmenu} = $self->_create_optionsmenu;
+	$self->_set_type($type);
 	$self->_init_tooltip;
 	return $self;
 }
 
 sub set {
 	my ($self, %hash) = @_;
+	$self->{graphhash} = \%hash;
 	$self->{graph}->set(%hash);
 }
 
-sub set_type {
+sub _set_type {
 	my ($self, $type) = @_;
 	my ($width, $height) = @{$self->{imagesize}};
 	$self->{graphtype} = $type;
@@ -45,10 +47,12 @@ sub set_type {
 	$self->{graph} = $graph;
 }
 
-sub set_legend {
-	my ($self, @legend_keys) = @_;
-	$self->{graph}->set_legend(@legend_keys);
-	$self->{graph}->{legend} = \@legend_keys;
+sub _refresh {
+	my ($self, $type) = @_;
+	$self->_set_type($type);
+	$self->{graph}->set(%{$self->{graphhash}}) if $self->{graphhash};
+	$self->set_legend(@{$self->{graphlegend}}) if $self->{graphlegend};
+	$self->get_image($self->{graphdata});
 }
 
 sub _init_tooltip {
@@ -64,9 +68,16 @@ sub _init_tooltip {
 	$self->{tooltip}->{label} = $tooltip_label;	
 }
 
+sub set_legend {
+	my ($self, @legend_keys) = @_;
+	return if ($self->{graphtype} eq 'pie');
+	$self->{graph}->set_legend(@legend_keys);
+	$self->{graphlegend} = \@legend_keys;
+}
+
 sub get_image {
 	my ($self, $data) = @_;
-	$self->{graph}->{data} = $data;
+	$self->{graphdata} = $data;
 	my $graph = $self->{graph};
 	$graph->plot($data) or warn $graph->error;
 	my $loader = Gtk2::Gdk::PixbufLoader->new;
@@ -79,9 +90,13 @@ sub get_image {
 			push @$hotspotlist, $hotspot if $hotspot;
 		}
 	}
-	my $eventbox = Gtk2::EventBox->new;
+	my $eventbox = $self->{eventbox};
+	my @children = $eventbox->get_children;
+	foreach my $child (@children) {
+		$eventbox->remove($child);
+	}
 	$eventbox->add ($image);
-	$eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask']);
+	$eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask', 'button-press-mask']);
 	$eventbox->signal_connect ('motion-notify-event' => 
 		sub {
 			my ($widget, $event) = @_;
@@ -93,7 +108,22 @@ sub get_image {
 				$self->check_hotspot($hotspotlist,$x,$y);
 			}
 		}
+	);
+	$eventbox->signal_connect ('button-press-event' => 
+		sub {
+			my ($widget, $event) = @_;
+			return FALSE unless $event->button == 3;
+			$self->{optionsmenu}->popup(
+				undef, # parent menu shell
+				undef, # parent menu item
+				undef, # menu pos func
+				undef, # data
+				$event->button,
+				$event->time
+			);
+		}
 	);	
+	$eventbox->show_all;
 	return $eventbox;
 }
 
@@ -105,11 +135,11 @@ sub check_hotspot {
 		foreach my $hotspot (@$datameasure) {			
 			my ($name, @coords) = @$hotspot;
 			if ($x >= $coords[0] && $x <= $coords[2] && $y >= $coords[1] && $y <= $coords[3]) {
-				my $xvalue = $self->{graph}->{data}->[0]->[$j];
-				my $yvalue = $self->{graph}->{data}->[$i+1]->[$j];
+				my $xvalue = $self->{graphdata}->[0]->[$j];
+				my $yvalue = $self->{graphdata}->[$i+1]->[$j];
 				my $tooltipstring;
-				if ($self->{graph}->{legend}) {
-					my $measure = $self->{graph}->{legend}->[$i];
+				if ($self->{graphlegend}) {
+					my $measure = $self->{graphlegend}->[$i];
 					$tooltipstring = "($measure, $xvalue, $yvalue)";
 				} else {
 					$tooltipstring = "($xvalue, $yvalue)";
@@ -133,6 +163,29 @@ sub check_hotspot {
 	$self->{tooltip}->{displayed} = FALSE;
 }
 
+sub _create_optionsmenu {
+	my ($self) = @_;
+	my $menu = Gtk2::Menu->new();
+
+	my $bars = Gtk2::MenuItem->new("bars");
+	my $lines = Gtk2::MenuItem->new("lines");
+	my $pie = Gtk2::MenuItem->new("pie");
+
+	$bars->signal_connect(activate => sub { $self->_refresh('bars'); } );
+	$lines->signal_connect(activate => sub { $self->_refresh('lines'); } );
+	$pie->signal_connect(activate => sub { $self->_refresh('pie'); } );
+				   
+	$bars->show();
+	$lines->show();
+	$pie->show();
+
+	$menu->append($bars);
+	$menu->append($lines);
+	$menu->append($pie);
+	
+	return $menu;
+}
+
 1;
 
 __END__
@@ -143,6 +196,8 @@ Gtk2::Ex::Graph::GD is a thin wrapper around the good-looking GD::Graph module. 
 using Gtk2 allows the GD::Graph object to respond to events such as mouse movements.
 
 The only additional functionality as of now is the mouse-over tooltip on the bar graph.
+
+Also, you can right-click and change the graph-type.
 
 
 =head1 SYNOPSIS
