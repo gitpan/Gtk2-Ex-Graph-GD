@@ -1,6 +1,6 @@
 package Gtk2::Ex::Graph::GD;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use strict;
 use warnings;
@@ -8,6 +8,8 @@ use Data::Dumper;
 use GD::Graph::bars;
 use GD::Graph::pie;
 use GD::Graph::lines;
+use GD::Graph::linespoints;
+use GD::Graph::area;
 use Gtk2;
 use Glib qw /TRUE FALSE/;
 
@@ -17,13 +19,35 @@ sub new {
 	bless ($self, $class);
 	$type or $type = 'bars';
 	$self->{graph} = undef;
+	$self->{graphhash} = undef;
 	$self->{graphtype} = $type;
 	$self->{imagesize} = [$width, $height];
-	$self->{eventbox} = Gtk2::EventBox->new;
+	$self->{eventbox} = $self->_create_eventbox;
 	$self->{optionsmenu} = $self->_create_optionsmenu;
 	$self->_set_type($type);
 	$self->_init_tooltip;
 	return $self;
+}
+
+sub _create_eventbox {
+	my ($self) = @_;
+	my $eventbox = Gtk2::EventBox->new;
+	$eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask', 'button-press-mask']);
+	$eventbox->signal_connect ('motion-notify-event' => 
+		sub {
+			my ($widget, $event) = @_;
+			my ($x, $y) = ($event->x, $event->y);
+			my @imageallocatedsize = $self->{graphimage}->allocation->values;
+			$x -= ($imageallocatedsize[2] - $self->{imagesize}->[0])/2;
+			$y -= ($imageallocatedsize[3] - $self->{imagesize}->[1])/2;
+			if ($self->{graphtype} eq 'bars') {
+				$self->check_bars_hotspot($x,$y);
+			} elsif ($self->{graphtype} eq 'lines' or $self->{graphtype} eq 'linespoints') {
+				$self->check_lines_hotspot($x,$y);
+			}
+		}
+	);
+	return $eventbox;
 }
 
 sub set {
@@ -41,15 +65,19 @@ sub _set_type {
 		$graph = GD::Graph::bars->new($width, $height);
 	} elsif ($type eq 'lines') {
 		$graph = GD::Graph::lines->new($width, $height);
+	} elsif ($type eq 'linespoints') {
+		$graph = GD::Graph::linespoints->new($width, $height);
+	} elsif ($type eq 'area') {
+		$graph = GD::Graph::area->new($width, $height);
 	} elsif ($type eq 'pie') {
 		$graph = GD::Graph::pie->new($width, $height);
 	}
+	$self->{graph} = undef;
 	$self->{graph} = $graph;
 }
 
 sub _refresh {
-	my ($self, $type) = @_;
-	$self->_set_type($type);
+	my ($self) = @_;
 	$self->{graph}->set(%{$self->{graphhash}}) if $self->{graphhash};
 	$self->set_legend(@{$self->{graphlegend}}) if $self->{graphlegend};
 	$self->get_image($self->{graphdata});
@@ -84,31 +112,23 @@ sub get_image {
 	$loader->write ($graph->gd->png);
 	$loader->close;
 	my $image = Gtk2::Image->new_from_pixbuf($loader->get_pixbuf);
+	$self->{graphimage} = $image;
 	my $hotspotlist;
-	if ($self->{graphtype} eq 'bars') {
+	if ($self->{graphtype} eq 'bars' or
+		$self->{graphtype} eq 'lines' or
+		$self->{graphtype} eq 'linespoints') {
 		foreach my $hotspot ($graph->get_hotspot) {
 			push @$hotspotlist, $hotspot if $hotspot;
 		}
 	}
+	$self->{hotspotlist} = $hotspotlist;
 	my $eventbox = $self->{eventbox};
 	my @children = $eventbox->get_children;
 	foreach my $child (@children) {
 		$eventbox->remove($child);
 	}
 	$eventbox->add ($image);
-	$eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask', 'button-press-mask']);
-	$eventbox->signal_connect ('motion-notify-event' => 
-		sub {
-			my ($widget, $event) = @_;
-			my ($x, $y) = ($event->x, $event->y);
-			my @imageallocatedsize = $image->allocation->values;
-			$x -= ($imageallocatedsize[2] - $self->{imagesize}->[0])/2;
-			$y -= ($imageallocatedsize[3] - $self->{imagesize}->[1])/2;
-			if ($self->{graphtype} eq 'bars') {
-				$self->check_hotspot($hotspotlist,$x,$y);
-			}
-		}
-	);
+
 	$eventbox->signal_connect ('button-press-event' => 
 		sub {
 			my ($widget, $event) = @_;
@@ -127,9 +147,64 @@ sub get_image {
 	return $eventbox;
 }
 
-sub check_hotspot {
-	my ($self, $hotspotlist, $x, $y) = @_;
+sub check_lines_hotspot {
+	my ($self, $x, $y) = @_;
 	my $i=0;
+	my $hotspotlist = $self->{hotspotlist};
+	foreach my $datameasure (@$hotspotlist){
+		my $j=0;
+		foreach my $hotspot (@$datameasure) {
+			my ($name, @coords) = @$hotspot;
+			if (_on_the_line($x, $y, @coords)) {
+				my $xvalue0 = $self->{graphdata}->[0]->[$j-1];
+				my $yvalue0 = $self->{graphdata}->[$i+1]->[$j-1];
+				my $xvalue1 = $self->{graphdata}->[0]->[$j];
+				my $yvalue1 = $self->{graphdata}->[$i+1]->[$j];
+				my $tooltipstring;
+				if ($self->{graphlegend}) {
+					my $measure = $self->{graphlegend}->[$i];
+					$tooltipstring = "($measure, ($xvalue0, $yvalue0), ($xvalue1, $yvalue1))";
+				} else {
+					$tooltipstring = "(($xvalue0, $yvalue0), ($xvalue1, $yvalue1))";
+				}
+				$self->{tooltip}->{label}->set_label($tooltipstring);
+				if (!$self->{tooltip}->{displayed}) {
+					$self->{tooltip}->{window}->show_all;
+					my ($thisx, $thisy) = $self->{tooltip}->{window}->window->get_origin;
+					# I want the window to be a bit away from the mouse pointer.
+					# Just a personal choice
+					$self->{tooltip}->{window}->move($thisx, $thisy-20);
+					$self->{tooltip}->{displayed} = TRUE;
+				}
+				return;		
+			}
+			$j++;
+		} 
+		$i++;	
+	}
+	$self->{tooltip}->{window}->hide;
+	$self->{tooltip}->{displayed} = FALSE;
+}
+
+sub _on_the_line {
+	my ($x, $y, @linecoords) = @_;
+	if (($x <= $linecoords[0] and  $x <= $linecoords[2]) or
+		($x >= $linecoords[0] and  $x >= $linecoords[2]) or
+		($y <= $linecoords[1] and  $y <= $linecoords[3]) or
+		($y >= $linecoords[1] and  $y >= $linecoords[3]) ){
+		return FALSE;
+	}
+	my $slope_diff = ($linecoords[1]-$linecoords[3])/($linecoords[0]-$linecoords[2]) - ($linecoords[3]-$y)/($linecoords[2]-$x);
+	if ($slope_diff > -0.1 and $slope_diff < 0.1) {
+		return TRUE;
+	}
+	return FALSE;	
+}
+
+sub check_bars_hotspot {
+	my ($self, $x, $y) = @_;
+	my $i=0;
+	my $hotspotlist = $self->{hotspotlist};
 	foreach my $datameasure (@$hotspotlist){
 		my $j=0;
 		foreach my $hotspot (@$datameasure) {			
@@ -169,19 +244,66 @@ sub _create_optionsmenu {
 
 	my $bars = Gtk2::MenuItem->new("bars");
 	my $lines = Gtk2::MenuItem->new("lines");
+	my $linespoints = Gtk2::MenuItem->new("lines with points");
+	my $area = Gtk2::MenuItem->new("area");
 	my $pie = Gtk2::MenuItem->new("pie");
+	my $cumulate = Gtk2::MenuItem->new("cumulate");
 
-	$bars->signal_connect(activate => sub { $self->_refresh('bars'); } );
-	$lines->signal_connect(activate => sub { $self->_refresh('lines'); } );
-	$pie->signal_connect(activate => sub { $self->_refresh('pie'); } );
-				   
+	$bars->signal_connect(activate => 
+		sub { 
+			$self->_set_type('bars');
+			$self->_refresh;
+		}
+	);
+	$lines->signal_connect(activate => 
+		sub { 
+			$self->_set_type('lines');
+			$self->_refresh;
+		}
+	);
+	$linespoints->signal_connect(activate => 
+		sub { 
+			$self->_set_type('linespoints');
+			$self->_refresh;
+		}
+	);
+	$area->signal_connect(activate => 
+		sub { 
+			$self->_set_type('area');
+			$self->_refresh;
+		}
+	);
+	$pie->signal_connect(activate => 
+		sub { 
+			$self->_set_type('pie');
+			$self->_refresh;
+		}
+	);
+	$cumulate->signal_connect(activate => 
+		sub {
+			if (exists($self->{graphhash}->{cumulate})) {
+				$self->{graphhash}->{cumulate} = !$self->{graphhash}->{cumulate};
+			} else {
+				$self->{graphhash}->{cumulate} = TRUE;
+			}
+			$self->_set_type($self->{graphtype});
+			$self->_refresh;
+		}
+	);
+	
 	$bars->show();
 	$lines->show();
+	$linespoints->show();
+	$area->show();
 	$pie->show();
+	$cumulate->show();
 
 	$menu->append($bars);
 	$menu->append($lines);
+	$menu->append($linespoints);
+	$menu->append($area);
 	$menu->append($pie);
+	$menu->append($cumulate);
 	
 	return $menu;
 }
@@ -190,7 +312,7 @@ sub _create_optionsmenu {
 
 __END__
 
-=head1 ABSTRACT
+=head1 NAME
 
 Gtk2::Ex::Graph::GD is a thin wrapper around the good-looking GD::Graph module. Wrapping
 using Gtk2 allows the GD::Graph object to respond to events such as mouse movements.

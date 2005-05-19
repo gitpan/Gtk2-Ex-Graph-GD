@@ -16,6 +16,8 @@ $graph->set (
 	bar_spacing     => 1,
 	shadowclr       => 'dred',
 	transparent     => 0,
+	#cumulate		=> TRUE,
+	type => ['bars', 'bars', 'bars'],
 );
 
 my @legend_keys = ('Field Mice Population', 'Fish Population', 'Lobster Growth in millions');
