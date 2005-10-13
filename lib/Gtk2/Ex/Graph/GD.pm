@@ -1,6 +1,6 @@
 package Gtk2::Ex::Graph::GD;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use strict;
 use warnings;
@@ -29,10 +29,16 @@ sub new {
 	return $self;
 }
 
+sub signal_connect {
+	my ($self, $signal, $callback) = @_;
+	$self->{signals}->{$signal} = $callback;
+}
+
 sub _create_eventbox {
 	my ($self) = @_;
 	my $eventbox = Gtk2::EventBox->new;
-	$eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask', 'button-press-mask']);
+	# $eventbox->add_events (['pointer-motion-mask', 'pointer-motion-hint-mask', 'button-press-mask']);
+	$eventbox->add_events ('pointer-motion-mask');
 	$eventbox->signal_connect ('motion-notify-event' => 
 		sub {
 			my ($widget, $event) = @_;
@@ -41,10 +47,54 @@ sub _create_eventbox {
 			$x -= ($imageallocatedsize[2] - $self->{imagesize}->[0])/2;
 			$y -= ($imageallocatedsize[3] - $self->{imagesize}->[1])/2;
 			if ($self->{graphtype} eq 'bars') {
-				$self->check_bars_hotspot($x,$y);
+				my $hotspot = $self->_check_bars_hotspot($x,$y);
+				if ($hotspot) {
+					my ($measure, $xvalue, $yvalue) = @$hotspot;
+					my $tooltipstring = $measure 
+						? "($measure, $xvalue, $yvalue)" 
+						: "($xvalue, $yvalue)";
+					$self->_show_tooltip($tooltipstring);
+					&{ $self->{signals}->{'mouse-over'} } ($hotspot)
+							if $self->{signals}->{'mouse-over'};
+				}
 			} elsif ($self->{graphtype} eq 'lines' or $self->{graphtype} eq 'linespoints') {
-				$self->check_lines_hotspot($x,$y);
+				my $hotspot = $self->_check_lines_hotspot($x,$y);
+				if ($hotspot) {
+					my ($measure, $xvalue0, $yvalue0, $xvalue1, $yvalue1) = @$hotspot;
+					my $tooltipstring = $measure 
+						? "($measure, ($xvalue0, $yvalue0), ($xvalue1, $yvalue1))"
+						: "(($xvalue0, $yvalue0), ($xvalue1, $yvalue1))";
+					$self->_show_tooltip($tooltipstring);
+					&{ $self->{signals}->{'mouse-over'} } ($hotspot)
+							if $self->{signals}->{'mouse-over'};
+				}
 			}
+		}
+	);
+	$eventbox->signal_connect ('button-press-event' => 
+		sub {
+			my ($widget, $event) = @_;
+			my ($x, $y) = ($event->x, $event->y);
+			my @imageallocatedsize = $self->{graphimage}->allocation->values;
+			$x -= ($imageallocatedsize[2] - $self->{imagesize}->[0])/2;
+			$y -= ($imageallocatedsize[3] - $self->{imagesize}->[1])/2;
+			my $hotspot;
+			if ($self->{graphtype} eq 'bars') {
+				$hotspot = $self->_check_bars_hotspot($x,$y);
+			} elsif ($self->{graphtype} eq 'lines' or $self->{graphtype} eq 'linespoints') {
+				$hotspot = $self->_check_lines_hotspot($x,$y);
+			}
+			&{ $self->{signals}->{'clicked'} } ($hotspot)
+					if $self->{signals}->{'clicked'} && $hotspot;
+			return FALSE unless $event->button == 3;
+			$self->{optionsmenu}->popup(
+				undef, # parent menu shell
+				undef, # parent menu item
+				undef, # menu pos func
+				undef, # data
+				$event->button,
+				$event->time
+			);
 		}
 	);
 	return $eventbox;
@@ -79,7 +129,7 @@ sub _set_type {
 sub _refresh {
 	my ($self) = @_;
 	$self->{graph}->set(%{$self->{graphhash}}) if $self->{graphhash};
-	$self->set_legend(@{$self->{graphlegend}}) if $self->{graphlegend};
+	$self->set_legend(@{$self->{graphlegend}}) if $#{@{$self->{graphlegend}}} >= 0;
 	$self->get_image($self->{graphdata});
 }
 
@@ -132,6 +182,7 @@ sub get_image {
 	$eventbox->signal_connect ('button-press-event' => 
 		sub {
 			my ($widget, $event) = @_;
+			return TRUE;
 			return FALSE unless $event->button == 3;
 			$self->{optionsmenu}->popup(
 				undef, # parent menu shell
@@ -147,7 +198,20 @@ sub get_image {
 	return $eventbox;
 }
 
-sub check_lines_hotspot {
+sub _show_tooltip {
+	my ($self, $tooltipstring) = @_;
+	$self->{tooltip}->{label}->set_label($tooltipstring);
+	if (!$self->{tooltip}->{displayed}) {
+		$self->{tooltip}->{window}->show_all;
+		my ($thisx, $thisy) = $self->{tooltip}->{window}->window->get_origin;
+		# I want the window to be a bit away from the mouse pointer.
+		# Just a personal choice
+		$self->{tooltip}->{window}->move($thisx, $thisy-20);
+		$self->{tooltip}->{displayed} = TRUE;
+	}	
+}
+
+sub _check_lines_hotspot {
 	my ($self, $x, $y) = @_;
 	my $i=0;
 	my $hotspotlist = $self->{hotspotlist};
@@ -160,23 +224,8 @@ sub check_lines_hotspot {
 				my $yvalue0 = $self->{graphdata}->[$i+1]->[$j-1];
 				my $xvalue1 = $self->{graphdata}->[0]->[$j];
 				my $yvalue1 = $self->{graphdata}->[$i+1]->[$j];
-				my $tooltipstring;
-				if ($self->{graphlegend}) {
-					my $measure = $self->{graphlegend}->[$i];
-					$tooltipstring = "($measure, ($xvalue0, $yvalue0), ($xvalue1, $yvalue1))";
-				} else {
-					$tooltipstring = "(($xvalue0, $yvalue0), ($xvalue1, $yvalue1))";
-				}
-				$self->{tooltip}->{label}->set_label($tooltipstring);
-				if (!$self->{tooltip}->{displayed}) {
-					$self->{tooltip}->{window}->show_all;
-					my ($thisx, $thisy) = $self->{tooltip}->{window}->window->get_origin;
-					# I want the window to be a bit away from the mouse pointer.
-					# Just a personal choice
-					$self->{tooltip}->{window}->move($thisx, $thisy-20);
-					$self->{tooltip}->{displayed} = TRUE;
-				}
-				return;		
+				my $measure = $self->{graphlegend}->[$i];
+				return [$measure, $xvalue0, $yvalue0, $xvalue1, $yvalue1];
 			}
 			$j++;
 		} 
@@ -194,14 +243,16 @@ sub _on_the_line {
 		($y >= $linecoords[1] and  $y >= $linecoords[3]) ){
 		return FALSE;
 	}
-	my $slope_diff = ($linecoords[1]-$linecoords[3])/($linecoords[0]-$linecoords[2]) - ($linecoords[3]-$y)/($linecoords[2]-$x);
+	my $slope_diff = 
+		($linecoords[1]-$linecoords[3])/($linecoords[0]-$linecoords[2]) 
+		- ($linecoords[3]-$y)/($linecoords[2]-$x);
 	if ($slope_diff > -0.1 and $slope_diff < 0.1) {
 		return TRUE;
 	}
 	return FALSE;	
 }
 
-sub check_bars_hotspot {
+sub _check_bars_hotspot {
 	my ($self, $x, $y) = @_;
 	my $i=0;
 	my $hotspotlist = $self->{hotspotlist};
@@ -212,23 +263,8 @@ sub check_bars_hotspot {
 			if ($x >= $coords[0] && $x <= $coords[2] && $y >= $coords[1] && $y <= $coords[3]) {
 				my $xvalue = $self->{graphdata}->[0]->[$j];
 				my $yvalue = $self->{graphdata}->[$i+1]->[$j];
-				my $tooltipstring;
-				if ($self->{graphlegend}) {
-					my $measure = $self->{graphlegend}->[$i];
-					$tooltipstring = "($measure, $xvalue, $yvalue)";
-				} else {
-					$tooltipstring = "($xvalue, $yvalue)";
-				}
-				$self->{tooltip}->{label}->set_label($tooltipstring);
-				if (!$self->{tooltip}->{displayed}) {
-					$self->{tooltip}->{window}->show_all;
-					my ($thisx, $thisy) = $self->{tooltip}->{window}->window->get_origin;
-					# I want the window to be a bit away from the mouse pointer.
-					# Just a personal choice
-					$self->{tooltip}->{window}->move($thisx, $thisy-20);
-					$self->{tooltip}->{displayed} = TRUE;
-				}
-				return;
+				my $measure = $self->{graphlegend}->[$i];
+				return [$measure, $xvalue, $yvalue];
 			} 
 			$j++;	
 		}
@@ -317,10 +353,7 @@ __END__
 Gtk2::Ex::Graph::GD is a thin wrapper around the good-looking GD::Graph module. Wrapping
 using Gtk2 allows the GD::Graph object to respond to events such as mouse movements.
 
-The only additional functionality as of now is the mouse-over tooltip on the bar graph.
-
-Also, you can right-click and change the graph-type.
-
+This allows functionalities such as mouse-over-tooltip and right-click menus on the Graph.
 
 =head1 SYNOPSIS
 
@@ -379,6 +412,30 @@ pack this C<$image> into the window.
 
 	my $image = $graph->get_image($data);
 
+=head2 signal_connect($signal, $callback)
+
+Two signals are supported
+
+	'mouse-over'
+	'clicked'
+	
+You can bind to these signals just like how you would bind to any normal Gtk2 widget signal.
+
+	$graph->signal_connect ('clicked' =>
+		sub {
+			print Dumper @_;
+		}
+	);
+	
+If the graph is of type C<bars> then the return values are
+
+	my ($measure, $xvalue, $yvalue) = @_
+
+If the graph is of type C<lines> then the return values are
+
+	my ($measure, $xvalue0, $yvalue0, $xvalue1, $yvalue1) = @_
+
+These callbacks are not currently supported for other graph types. I may add them later on.
 =head1 COPYRIGHT AND LICENSE
 
 Copyright (C) 2005 by Ofey Aikon

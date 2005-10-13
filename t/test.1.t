@@ -7,7 +7,10 @@ use Gtk2 -init;
 use Glib qw /TRUE FALSE/;
 use Data::Dumper;
 
+use Gtk2::TestHelper tests => 2;
+
 my $graph = Gtk2::Ex::Graph::GD->new(500, 300, 'bars');
+isa_ok($graph, "Gtk2::Ex::Graph::GD");
 
 # All the properties set here go straight into the GD::Graph::* object created inside.
 # Therefore, any property acceptable to the GD::Graph::* object can be passed through here
@@ -18,7 +21,7 @@ $graph->set (
 	shadowclr       => 'dred',
 	transparent     => 0,
 	# cumulate		=> TRUE,
-	type => ['lisen', 'bars', 'bars'],
+	type => ['bars', 'bars', 'bars'],
 );
 
 my @legend_keys = ('Field Mice Population', 'Fish Population', 'Lobster Growth in millions');
@@ -46,10 +49,10 @@ $graph->signal_connect ('clicked' =>
 # This actually returns an eventbox instead of an image. 
 # But you don't <really> care either way, do you ?
 my $image = $graph->get_image($data);
+isa_ok($image, "Gtk2::EventBox");
 
 my $window = Gtk2::Window->new;
 $window->signal_connect(destroy => sub { Gtk2->main_quit; });
 $window->set_default_size(700, 500);
 $window->add($image);
 $window->show_all;
-Gtk2->main;
